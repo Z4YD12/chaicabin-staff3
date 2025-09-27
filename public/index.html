@@ -1,0 +1,18 @@
+
+<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>ChaiCabin Login</title><link rel="stylesheet" href="/styles.css"></head><body>
+<div class="header"><div class="logo"><img src="/assets/logo.png" /></div><div style="font-weight:700">ChaiCabin Staff Portal</div></div>
+<div class="container"><div class="card" style="max-width:480px;margin:40px auto">
+<h2>Sign in</h2><p class="small">Use phone + password. Demo: 07100000001 / pass (staff) | 07100000010 / pass (admin)</p>
+<label class="small">Phone</label><input id="phone" class="input" placeholder="071..."/><label class="small">Password</label><input id="password" class="input" type="password"/>
+<div style="margin-top:12px"><button id="loginBtn" class="btn">Sign in</button></div><p id="err" class="small" style="color:#ff9b9b"></p>
+</div></div>
+<script>
+document.getElementById('loginBtn').addEventListener('click', async ()=>{
+  const phone = document.getElementById('phone').value;
+  const password = document.getElementById('password').value;
+  const res = await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({phone,password})});
+  if(res.status===200){ const j=await res.json(); sessionStorage.setItem('user', JSON.stringify(j.user)); if(j.user.role==='admin') window.location='/admin.html'; else window.location='/staff.html'; }
+  else { const e=await res.json(); document.getElementById('err').textContent = e.error || 'Login failed'; }
+});
+</script>
+</body></html>

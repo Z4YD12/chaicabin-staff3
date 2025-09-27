@@ -1,0 +1,77 @@
+
+<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Admin Dashboard</title>
+<link rel="stylesheet" href="/styles.css"/><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.css" rel="stylesheet"/>
+</head><body>
+<div class="header"><div class="logo"><img src="/assets/logo.png"/></div><div style="font-weight:700">Admin Dashboard</div></div>
+<div class="container">
+  <div id="banners"></div>
+  <div class="grid">
+    <div>
+      <div class="card"><h3>Notifications</h3><div id="notifications" class="small"></div></div>
+      <div class="card"><h3>Manage Employees</h3><div id="empList" class="small"></div>
+        <h4>Add Employee</h4><input id="newName" class="input" placeholder="Name"><input id="newPhone" class="input" placeholder="Phone"><input id="newPass" class="input" placeholder="Password"><input id="newWage" class="input" placeholder="Wage"><div style="margin-top:8px"><button id="addEmp" class="btn">Add Employee</button></div>
+      </div>
+      <div class="card"><h3>Stock Requests</h3><div id="stockList" class="small"></div></div>
+      <div class="card"><h3>Timeoff Requests</h3><div id="timeoffList" class="small"></div></div>
+    </div>
+    <div>
+      <div class="card"><h3>Shifts Calendar</h3><div id="adminCal"></div><div style="margin-top:8px"><input id="shiftStart" class="input" placeholder="Start (ISO)"><input id="shiftEnd" class="input" placeholder="End (ISO)"><select id="shiftUser"></select><div style="margin-top:8px"><button id="createShift" class="btn">Create Shift</button></div></div></div>
+      <div class="card"><h3>Payroll</h3><div><input id="payMonth" class="input" placeholder="YYYY-MM"><div style="margin-top:8px"><button id="genPayroll" class="btn">Generate Payroll Now</button></div></div><div id="payrollSummary" class="small"></div></div>
+      <div class="card"><h3>Company Overview</h3><canvas id="companyChart" height="120"></canvas><div id="companySummary" class="small"></div></div>
+    </div>
+  </div>
+</div>
+<div class="halo"></div>
+<script>
+const user = JSON.parse(sessionStorage.getItem('user')||'null');
+if(!user || user.role!=='admin') window.location='/';
+const es = new EventSource('/events');
+es.addEventListener('notify', e=>{ const d=JSON.parse(e.data); addNotif(d.message); });
+es.addEventListener('payroll-generated', e=>{ const d=JSON.parse(e.data); addNotif('Payroll generated for '+d.month); loadPayrollSummary(); });
+es.addEventListener('late', e=>{ const d=JSON.parse(e.data); addNotif('Late: '+d.user); loadNotifications(); });
+
+function addBanner(txt){ const b=document.createElement('div'); b.className='banner'; b.innerHTML = txt + ' <button style="float:right" onclick="this.parentElement.remove()">Dismiss</button>'; document.getElementById('banners').appendChild(b); }
+function addNotif(txt){ const el=document.getElementById('notifications'); const d=document.createElement('div'); d.className='small'; d.textContent=txt; el.prepend(d); }
+
+async function loadEmployees(){ const res=await fetch('/api/admin/users'); const j=await res.json(); const el=document.getElementById('empList'); const sel=document.getElementById('shiftUser'); el.innerHTML=''; sel.innerHTML=''; j.users.forEach(u=>{ const d=document.createElement('div'); d.className='small'; d.innerHTML = u.name + ' ('+u.phone+') - £'+(u.wage||0) + ' <button data-id="'+u.id+'" class="btn wageBtn">Edit Wage</button>'; el.appendChild(d); const o=document.createElement('option'); o.value=u.id; o.textContent=u.name; sel.appendChild(o); }); document.querySelectorAll('.wageBtn').forEach(b=> b.addEventListener('click', async (ev)=>{ const id=ev.target.dataset.id; const w=prompt('New wage'); if(!w) return; await fetch('/api/admin/wage/'+id,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({wage:Number(w)})}); loadEmployees(); })); }
+document.getElementById('addEmp').addEventListener('click', async ()=>{ const name=document.getElementById('newName').value; const phone=document.getElementById('newPhone').value; const password=document.getElementById('newPass').value; const wage=Number(document.getElementById('newWage').value||0); await fetch('/api/admin/users',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name,phone,password,wage})}); loadEmployees(); });
+
+async function loadStock(){ const res=await fetch('/api/admin/stock-requests'); const j=await res.json(); const el=document.getElementById('stockList'); el.innerHTML=''; j.requests.forEach(r=>{ const d=document.createElement('div'); d.className='small'; d.innerHTML = r.item + ' — ' + r.status + ' <button data-id="'+r.id+'" class="btn approveStock">Approve</button>'; el.appendChild(d); }); document.querySelectorAll('.approveStock').forEach(b=> b.addEventListener('click', async (ev)=>{ const id=ev.target.dataset.id; await fetch('/api/admin/stock-requests/'+id+'/approve',{method:'POST'}); loadStock(); })); }
+
+async function loadTimeoffs(){ const res=await fetch('/api/admin/timeoffs'); const j=await res.json(); const el=document.getElementById('timeoffList'); el.innerHTML=''; j.timeoffs.forEach(t=>{ const d=document.createElement('div'); d.className='small'; d.innerHTML = t.name + ' ' + t.from_dt + ' - ' + t.to_dt + ' — ' + t.status + ' <button data-id="'+t.id+'" class="btn approveTime">Approve</button>'; el.appendChild(d); }); document.querySelectorAll('.approveTime').forEach(b=> b.addEventListener('click', async (ev)=>{ const id=ev.target.dataset.id; await fetch('/api/admin/timeoffs/'+id+'/approve',{method:'POST'}); loadTimeoffs(); })); }
+
+// shifts calendar
+let adminCal = null;
+function renderAdminCal(){
+  const el = document.getElementById('adminCal'); el.innerHTML='';
+  adminCal = new FullCalendar.Calendar(el, { initialView:'dayGridMonth', height:450, events: async function(info, successCb){ const res = await fetch('/api/admin/shifts'); const j=await res.json(); const evs = j.shifts.map(s=>({ id:s.id, title:s.name || 'Shift', start:s.start_ts, end:s.end_ts })); successCb(evs); } });
+  adminCal.render();
+}
+
+// create shift
+document.getElementById('createShift').addEventListener('click', async ()=>{
+  const userId = Number(document.getElementById('shiftUser').value);
+  const start = document.getElementById('shiftStart').value;
+  const end = document.getElementById('shiftEnd').value;
+  if(!userId||!start||!end) return alert('fill fields');
+  await fetch('/api/admin/shifts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId, startTs:start, endTs:end})});
+  renderAdminCal(); loadEmployees();
+});
+
+// payroll generate
+document.getElementById('genPayroll').addEventListener('click', async ()=>{
+  const month = document.getElementById('payMonth').value || new Date().toISOString().slice(0,7);
+  await fetch('/api/admin/payroll/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({month})});
+  loadPayrollSummary();
+});
+
+async function loadPayrollSummary(){ const month = new Date().toISOString().slice(0,7); const res=await fetch('/api/admin/payroll/'+month); const j=await res.json(); const el=document.getElementById('payrollSummary'); el.innerHTML=''; let total=0; j.rows.forEach(r=>{ el.innerHTML += `<div class="small">${r.name}: £${r.total_pay}</div>`; total += r.total_pay; }); document.getElementById('companySummary').textContent = 'Total payroll: £' + total.toFixed(2); const ctx = document.getElementById('companyChart').getContext('2d'); if(window.companyChart) window.companyChart.destroy(); window.companyChart = new Chart(ctx, { type:'bar', data:{ labels: j.rows.map(x=>x.name), datasets:[{ label:'Pay', data: j.rows.map(x=>x.total_pay) }] } }); }
+
+async function loadNotifications(){ const res=await fetch('/api/admin/clock-events'); const j=await res.json(); const el=document.getElementById('notifications'); el.innerHTML=''; j.events.slice(0,10).forEach(e=>{ const d=document.createElement('div'); d.className='small'; d.textContent = e.name + ' — ' + (e.clock_in||e.clock_out); el.appendChild(d); }); }
+
+// initial loads
+loadEmployees(); renderAdminCal(); loadStock(); loadTimeoffs(); loadPayrollSummary(); loadNotifications();
+
+</script></body></html>

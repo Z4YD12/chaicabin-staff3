@@ -1,0 +1,128 @@
+
+<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Staff Dashboard</title>
+<link rel="stylesheet" href="/styles.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.css" rel="stylesheet"/>
+</head><body>
+<div class="header"><div class="logo"><img src="/assets/logo.png"/></div><div style="font-weight:700">Staff Dashboard</div><div style="margin-left:auto" id="uName"></div></div>
+<div class="container">
+  <div id="banners"></div>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h3>Clock</h3>
+        <div class="small">Clock for: <select id="forWho"><option value="">Myself</option></select></div>
+        <div style="display:flex;gap:8px;margin-top:8px"><button id="clockIn" class="btn">Clock In</button><button id="clockOut" class="btn">Clock Out</button></div>
+        <p id="clockStatus" class="small"></p>
+      </div>
+      <div class="card">
+        <h3>Request Shift Change</h3>
+        <input id="reqShiftId" class="input" placeholder="Shift ID"><input id="reqShiftMsg" class="input" placeholder="Reason"><div style="margin-top:8px"><button id="reqShiftBtn" class="btn">Request Change</button></div>
+      </div>
+      <div class="card">
+        <h3>Stock Request</h3>
+        <textarea id="stockItems" class="input" style="height:80px"></textarea><div style="margin-top:8px"><button id="sendStock" class="btn">Send Request</button></div><p id="stockAck" class="small"></p>
+      </div>
+      <div class="card">
+        <h3>Tasks</h3>
+        <div id="taskList" class="small"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h3>Earnings Overview</h3>
+        <canvas id="earnChart" height="120"></canvas>
+        <p class="small" id="earnSummary"></p>
+      </div>
+      <div class="card">
+        <h3>Your Shifts</h3>
+        <div style="margin-bottom:8px"><button id="viewWeek" class="btn">Week</button><button id="viewMonth" class="btn">Month</button></div>
+        <div id="calendar"></div>
+      </div>
+      <div class="card">
+        <h3>Payroll History</h3>
+        <div id="payrollList" class="small"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="halo"></div>
+<script>
+const user = JSON.parse(sessionStorage.getItem('user')||'null');
+if(!user) window.location='/';
+document.getElementById('uName').textContent = user.name;
+const es = new EventSource('/events');
+es.addEventListener('notify', e=>{ const d=JSON.parse(e.data); /* global notice */ });
+es.addEventListener('reminder-11am', e=>{ const d=JSON.parse(e.data); addBanner('Reminder: Today '+d.user+' shift at '+ new Date(d.start).toLocaleTimeString()); });
+es.addEventListener('late', e=>{ const d=JSON.parse(e.data); addBanner('You are late: '+d.user); });
+es.addEventListener('shift-updated', e=>{ const d=JSON.parse(e.data); addBanner('Shift updated'); loadShifts(); loadEarnings(); });
+
+function addBanner(txt){
+  const b = document.createElement('div'); b.className='banner'; b.innerHTML = txt + ' <button style="float:right" onclick="this.parentElement.remove()">Dismiss</button>'; document.getElementById('banners').appendChild(b);
+}
+
+// populate staff list for group clock
+async function loadStaffList(){
+  const res = await fetch('/api/admin/users'); const j=await res.json();
+  const sel = document.getElementById('forWho'); sel.innerHTML='<option value="">Myself</option>';
+  j.users.forEach(u=>{ if(u.role==='staff') { const o=document.createElement('option'); o.value=u.id; o.textContent=u.name+' ('+u.phone+')'; if(u.id==user.id) o.selected=true; sel.appendChild(o); } });
+}
+
+// clock functions with geolocation
+async function postClock(type){
+  let coords=null;
+  if(navigator.geolocation){ coords = await new Promise(resolve=>navigator.geolocation.getCurrentPosition(p=>resolve(p.coords), e=>resolve(null))); }
+  const lat = coords?coords.latitude:null; const lng = coords?coords.longitude:null;
+  const target = document.getElementById('forWho').value || null;
+  const body = { userId: user.id, type, lat, lng }; if(target && String(target)!==String(user.id)) body.targetUserId = Number(target);
+  const res = await fetch('/api/clock',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const j = await res.json();
+  if(!res.ok){ document.getElementById('clockStatus').textContent = j.error || 'Error'; return; }
+  document.getElementById('clockStatus').textContent = type + ' recorded at ' + new Date(j.ts).toLocaleString();
+  loadEarnings();
+}
+
+document.getElementById('clockIn').addEventListener('click', ()=>postClock('in'));
+document.getElementById('clockOut').addEventListener('click', ()=>postClock('out'));
+
+// send stock
+document.getElementById('sendStock').addEventListener('click', async ()=>{ const items=document.getElementById('stockItems').value; await fetch('/api/stock',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:user.id,items})}); document.getElementById('stockAck').textContent='Sent'; });
+
+// request shift change
+document.getElementById('reqShiftBtn').addEventListener('click', async ()=>{ const id=document.getElementById('reqShiftId').value; const msg=document.getElementById('reqShiftMsg').value; await fetch('/api/timeoff',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:user.id,from:id,to:id,reason:msg})}); addBanner('Requested shift change'); });
+
+// tasks loader
+async function loadTasks(){ const res=await fetch('/api/tasks/user/'+user.id); const j=await res.json(); const el=document.getElementById('taskList'); el.innerHTML=''; j.tasks.forEach(t=>{ const d=document.createElement('div'); d.textContent = t.description + ' — ' + t.status; el.appendChild(d); }); }
+
+// calendar via FullCalendar
+let calendar = null;
+function renderCalendar(view='timeGridWeek'){
+  const el = document.getElementById('calendar');
+  el.innerHTML='';
+  calendar = new FullCalendar.Calendar(el, { initialView: view, height:450, events: async function(info, successCallback){ const res = await fetch('/api/shifts/user/'+user.id); const j=await res.json(); const evs = j.shifts.map(s=>({ id:s.id, title:'Shift', start:s.start_ts, end:s.end_ts })); successCallback(evs); } });
+  calendar.render();
+}
+document.getElementById('viewWeek').addEventListener('click', ()=> renderCalendar('timeGridWeek'));
+document.getElementById('viewMonth').addEventListener('click', ()=> renderCalendar('dayGridMonth'));
+
+// earnings chart and summary
+async function loadEarnings(){
+  const res = await fetch('/api/staff/earnings/'+user.id); const j=await res.json();
+  document.getElementById('earnSummary').textContent = 'Earned so far: £'+j.earned+' | Expected: £'+j.expectedEarn;
+  const ctx = document.getElementById('earnChart').getContext('2d');
+  if(window.earnChart) window.earnChart.destroy();
+  window.earnChart = new Chart(ctx, { type:'doughnut', data:{ labels:['Earned','Expected Remaining'], datasets:[{ data:[j.earned, Math.max(0,j.expectedEarn-j.earned)] }] } });
+}
+
+// payroll history
+async function loadPayroll(){
+  const month = new Date().toISOString().slice(0,7);
+  const res = await fetch('/api/payroll/user/'+user.id+'/'+month); const j=await res.json();
+  const el = document.getElementById('payrollList'); el.innerHTML=''; if(j.payroll){ el.textContent = 'Hours: '+j.payroll.hours+' | Pay: £'+j.payroll.total_pay; } else el.textContent='No payroll yet';
+}
+
+// initial loads
+loadStaffList(); renderCalendar('timeGridWeek'); loadTasks(); loadEarnings(); loadPayroll();
+
+</script></body></html>
